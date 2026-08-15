@@ -1,4 +1,5 @@
 "use client";
+
 import { useState } from "react";
 import Papa from "papaparse";
 
@@ -44,9 +45,9 @@ export default function FileUploader() {
             <tbody>
               {data.map((row, index) => (
                 <tr key={index} className="border-b hover:bg-gray-50">
-                  {Object.values(row).map((val: any, idx) => (
+                  {Object.values(row).map((val, idx) => (
                     <td key={idx} className="p-3 text-sm text-gray-600">
-                      {val}
+                      {String(val)}
                     </td>
                   ))}
                 </tr>
