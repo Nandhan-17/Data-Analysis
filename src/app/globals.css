@@ -5,49 +5,131 @@
 @tailwind utilities;
 
 :root {
-  --background: #090d16;
-  --foreground: #f8fafc;
+  --background: #ffffff;
+  --foreground: #202124;
+
+  /* Google-style colors */
+  --google-blue: #4285f4;
+  --google-red: #ea4335;
+  --google-yellow: #fbbc04;
+  --google-green: #34a853;
+
+  /* Dashboard colors */
+  --surface: #ffffff;
+  --surface-soft: #f8fafb;
+  --border: #e0e3e7;
+  --text-primary: #202124;
+  --text-secondary: #5f6368;
+}
+
+/* Main Page Background */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
+  color: var(--text-primary);
+  background: #ffffff;
   font-family: 'Inter', sans-serif;
   overflow-x: hidden;
+
+  /* Very subtle dashboard background */
+  background-image:
+    linear-gradient(
+      rgba(66, 133, 244, 0.018) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(52, 168, 83, 0.018) 1px,
+      transparent 1px
+    );
+
+  background-size: 32px 32px;
+}
+
+/* Main Dashboard Container */
+.dashboard-background {
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+/* Dashboard Content Area */
+.dashboard-content {
+  background: #ffffff;
+}
+
+/* Cards / Panels */
+.glass-panel {
+  background: #ffffff;
+  border: 1px solid #e0e3e7;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(60, 64, 67, 0.08);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Card Hover */
+.glass-panel-hover {
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.glass-panel-hover:hover {
+  border-color: #c5c9ce;
+  box-shadow: 0 4px 12px rgba(60, 64, 67, 0.12);
+  transform: translateY(-1px);
+}
+
+/* Soft Section */
+.soft-section {
+  background: #f8fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+/* Google-style top/header area */
+.dashboard-header {
+  background: #ffffff;
+  border-bottom: 1px solid #dadce0;
+}
+
+/* Primary text */
+.text-primary {
+  color: #202124;
+}
+
+/* Secondary text */
+.text-secondary {
+  color: #5f6368;
 }
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #f8f9fa;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #c7c9cc;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #9aa0a6;
 }
 
-.glass-panel {
-  background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.glass-panel-hover {
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.glass-panel-hover:hover {
-  border-color: rgba(99, 102, 241, 0.3);
-  box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.1), 0 8px 10px -6px rgba(99, 102, 241, 0.1);
-  transform: translateY(-2px);
+/* Selection */
+::selection {
+  background: rgba(66, 133, 244, 0.18);
+  color: #202124;
 }
