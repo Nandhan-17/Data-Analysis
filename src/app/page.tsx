@@ -184,30 +184,31 @@ export default function Home() {
 
             <div className="space-y-4">
               {[
-  ["Category A", 78, "#4285F4"],
-  ["Category B", 62, "#34A853"],
-  ["Category C", 48, "#FBBC04"],
-  ["Category D", 35, "#EA4335"],
-].map(([name, value, color]) => (
-                <div key={name as string}>
-                  <div className="mb-1 flex justify-between text-sm">
-                    <span>{name}</span>
-                    <span className="text-secondary">
-                      {value}%
-                    </span>
-                  </div>
+  { name: "Category A", value: 78, color: "#4285F4" },
+  { name: "Category B", value: 62, color: "#34A853" },
+  { name: "Category C", value: 48, color: "#FBBC04" },
+  { name: "Category D", value: 35, color: "#EA4335" },
+].map((item) => (
+  <div key={item.name}>
+    <div className="mb-1 flex justify-between text-sm">
+      <span>{item.name}</span>
 
-                  <div className="h-2 overflow-hidden rounded-full bg-[#f1f3f4]">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${value}%`,
-                        backgroundColor: color,
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
+      <span className="text-secondary">
+        {item.value}%
+      </span>
+    </div>
+
+    <div className="h-2 overflow-hidden rounded-full bg-[#f1f3f4]">
+      <div
+        className="h-full rounded-full"
+        style={{
+          width: `${item.value}%`,
+          backgroundColor: item.color,
+        }}
+      />
+    </div>
+  </div>
+))}
             </div>
           </div>
 
