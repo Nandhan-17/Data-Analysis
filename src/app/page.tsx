@@ -25,7 +25,7 @@ type ProjectRecord = {
   endDate: string;
 
   progress: number;
-  status: StatusKey as StatusKey
+  status: StatusKey:
   risk: "Low" | "Medium" | "High";
 
   daysRequired: number | null;
