@@ -184,11 +184,11 @@ export default function Home() {
 
             <div className="space-y-4">
               {[
-                ["Category A", 78, "#4285F4"],
-                ["Category B", 62, "#34A853"],
-                ["Category C", 48, "#FBBC04"],
-                ["Category D", 35, "#EA4335"],
-              ].map(([name, value, color]) => (
+  ["Category A", 78, "#4285F4"],
+  ["Category B", 62, "#34A853"],
+  ["Category C", 48, "#FBBC04"],
+  ["Category D", 35, "#EA4335"],
+].map(([name, value, color]) => (
                 <div key={name as string}>
                   <div className="mb-1 flex justify-between text-sm">
                     <span>{name}</span>
