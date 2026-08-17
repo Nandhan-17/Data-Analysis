@@ -3709,26 +3709,26 @@ export default function Home() {
                         </td>
 
                         <td className="px-6 py-5">
-                          <button
-                            onClick={() =>
-                              openStatus(
-                                record.status
-                              )
-                            }
-                            className="rounded-full px-3 py-1.5 text-xs font-bold"
-                            style={{
-                              backgroundColor: `${STATUS_COLORS[record.status]}18`,
-                              color:
-                                STATUS_COLORS[
-                                  record.status
-                                ],
-                            }}
-                          >
-                            {
-                              record.status
-                            }
-                          </button>
-                        </td>
+          <button
+            onClick={() =>
+              openStatus(
+                record.status as StatusKey
+              )
+            }
+            className="rounded-full px-3 py-1.5 text-xs font-bold"
+            style={{
+              backgroundColor: `${STATUS_COLORS[record.status as StatusKey]}18`,
+              color:
+                STATUS_COLORS[
+                  record.status as StatusKey
+                ],
+            }}
+          >
+            {
+              record.status
+            }
+          </button>
+        </td>
 
                         <td className="px-6 py-5">
                           <span
