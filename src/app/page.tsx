@@ -4693,10 +4693,10 @@ export default function Home() {
                             }
                             className="rounded-full px-3 py-1.5 text-xs font-bold"
                             style={{
-                              backgroundColor: `${STATUS_COLORS[record.status]}18`,
+                              backgroundColor: `${STATUS_COLORS[record.status as StatusKey]}18`,
                               color:
                                 STATUS_COLORS[
-                                  record.status
+                                  record.status as StatusKey
                                 ],
                             }}
                           >
