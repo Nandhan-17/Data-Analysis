@@ -965,6 +965,976 @@ function Icon({
   );
 }
 
+
+/* =========================================================
+   DYNAMIC CSV CHARTS
+   Charts are generated only from the currently imported CSV.
+   No chart data or column names are hard-coded.
+========================================================= */
+
+type DynamicColumnInfo = {
+  numeric: string[];
+  categorical: string[];
+  dates: string[];
+};
+
+function detectDynamicColumns(rows: CSVRow[]): DynamicColumnInfo {
+  if (!rows.length) {
+    return { numeric: [], categorical: [], dates: [] };
+  }
+
+  const columns = Object.keys(rows[0]);
+  const sample = rows.slice(0, Math.min(rows.length, 200));
+
+  const numeric: string[] = [];
+  const dates: string[] = [];
+  const categorical: string[] = [];
+
+  columns.forEach((column) => {
+    const values = sample
+      .map((row) => row[column]?.trim() || "")
+      .filter(Boolean);
+
+    if (!values.length) {
+      return;
+    }
+
+    const numericCount = values.filter(
+      (value) => numberValue(value) !== null
+    ).length;
+
+    const dateCount = values.filter(
+      (value) => parseDate(value) !== null
+    ).length;
+
+    if (numericCount / values.length >= 0.7) {
+      numeric.push(column);
+    } else if (dateCount / values.length >= 0.7) {
+      dates.push(column);
+    } else {
+      categorical.push(column);
+    }
+  });
+
+  return { numeric, categorical, dates };
+}
+
+function shortenChartLabel(value: string, max = 16) {
+  return value.length > max
+    ? `${value.slice(0, max - 1)}…`
+    : value;
+}
+
+function aggregateChartValues(
+  rows: CSVRow[],
+  groupColumn: string,
+  valueColumn: string | null
+) {
+  const groups = new Map<
+    string,
+    { total: number; count: number }
+  >();
+
+  rows.forEach((row) => {
+    const label =
+      row[groupColumn]?.trim() || "Unknown";
+
+    const current =
+      groups.get(label) || {
+        total: 0,
+        count: 0,
+      };
+
+    if (valueColumn) {
+      const value = numberValue(
+        row[valueColumn] || ""
+      );
+
+      if (value !== null) {
+        current.total += value;
+        current.count += 1;
+      }
+    } else {
+      current.count += 1;
+    }
+
+    groups.set(label, current);
+  });
+
+  return Array.from(groups.entries())
+    .map(([label, item]) => ({
+      label,
+      value: valueColumn
+        ? item.count
+          ? item.total / item.count
+          : 0
+        : item.count,
+    }))
+    .filter((item) => item.value !== 0)
+    .sort((a, b) => b.value - a.value);
+}
+
+function DynamicLineChart({
+  rows,
+  columns,
+}: {
+  rows: CSVRow[];
+  columns: DynamicColumnInfo;
+}) {
+  const dateColumn =
+    columns.dates[0] || null;
+  const valueColumn =
+    columns.numeric[0] || null;
+  const categoryColumn =
+    columns.categorical[0] || null;
+
+  let data: {
+    label: string;
+    value: number;
+  }[] = [];
+
+  let subtitle = "";
+
+  if (dateColumn) {
+    const groups = new Map<
+      string,
+      { total: number; count: number }
+    >();
+
+    rows.forEach((row) => {
+      const date = parseDate(
+        row[dateColumn] || ""
+      );
+
+      if (!date) {
+        return;
+      }
+
+      const label =
+        date.toLocaleDateString("en-US", {
+          month: "short",
+          year: "numeric",
+        });
+
+      const current =
+        groups.get(label) || {
+          total: 0,
+          count: 0,
+        };
+
+      const value = valueColumn
+        ? numberValue(
+            row[valueColumn] || ""
+          )
+        : 1;
+
+      if (value !== null) {
+        current.total += value;
+        current.count += 1;
+      }
+
+      groups.set(label, current);
+    });
+
+    data = Array.from(groups.entries())
+      .map(([label, item]) => ({
+        label,
+        value: valueColumn
+          ? item.count
+            ? item.total / item.count
+            : 0
+          : item.total,
+      }))
+      .slice(-12);
+
+    subtitle = valueColumn
+      ? `Average ${valueColumn} by ${dateColumn}`
+      : `Record volume by ${dateColumn}`;
+  } else if (categoryColumn) {
+    data = aggregateChartValues(
+      rows,
+      categoryColumn,
+      valueColumn
+    )
+      .slice(0, 12)
+      .reverse();
+
+    subtitle = valueColumn
+      ? `Average ${valueColumn} by ${categoryColumn}`
+      : `Records by ${categoryColumn}`;
+  } else {
+    const chunkSize = Math.max(
+      1,
+      Math.ceil(rows.length / 12)
+    );
+
+    data = Array.from({
+      length: Math.min(
+        12,
+        Math.ceil(rows.length / chunkSize)
+      ),
+    }).map((_, index) => {
+      const start = index * chunkSize;
+      const chunk = rows.slice(
+        start,
+        start + chunkSize
+      );
+
+      const values = valueColumn
+        ? chunk
+            .map((row) =>
+              numberValue(
+                row[valueColumn] || ""
+              )
+            )
+            .filter(
+              (value): value is number =>
+                value !== null
+            )
+        : [];
+
+      return {
+        label: `Group ${index + 1}`,
+        value: valueColumn
+          ? values.length
+            ? values.reduce(
+                (sum, value) => sum + value,
+                0
+              ) / values.length
+            : 0
+          : chunk.length,
+      };
+    });
+
+    subtitle = valueColumn
+      ? `Average ${valueColumn} across CSV groups`
+      : "Record volume across CSV groups";
+  }
+
+  if (data.length < 2) {
+    return (
+      <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+        Not enough compatible CSV data for a line chart.
+      </div>
+    );
+  }
+
+  const max = Math.max(
+    ...data.map((item) => item.value),
+    1
+  );
+  const min = Math.min(
+    ...data.map((item) => item.value),
+    0
+  );
+  const range = Math.max(max - min, 1);
+
+  const points = data
+    .map((item, index) => {
+      const x =
+        36 +
+        (index / Math.max(data.length - 1, 1)) *
+          640;
+      const y =
+        232 -
+        ((item.value - min) / range) *
+          190;
+
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  return (
+    <div>
+      <p className="mb-4 text-xs text-slate-400">
+        {subtitle}
+      </p>
+
+      <div className="overflow-x-auto">
+        <svg
+          viewBox="0 0 700 280"
+          className="h-64 min-w-[620px] w-full"
+          role="img"
+          aria-label="Dynamic CSV line chart"
+        >
+          {[0, 1, 2, 3, 4].map(
+            (step) => {
+              const y =
+                42 + step * 47.5;
+
+              return (
+                <line
+                  key={step}
+                  x1="36"
+                  x2="676"
+                  y1={y}
+                  y2={y}
+                  stroke="#e2e8f0"
+                  strokeWidth="1"
+                />
+              );
+            }
+          )}
+
+          <polyline
+            fill="none"
+            stroke="#2563eb"
+            strokeWidth="4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            points={points}
+          />
+
+          {data.map(
+            (item, index) => {
+              const x =
+                36 +
+                (index /
+                  Math.max(
+                    data.length - 1,
+                    1
+                  )) *
+                  640;
+              const y =
+                232 -
+                ((item.value - min) /
+                  range) *
+                  190;
+
+              return (
+                <g key={`${item.label}-${index}`}>
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r="5"
+                    fill="#2563eb"
+                  />
+                  <text
+                    x={x}
+                    y="258"
+                    textAnchor="middle"
+                    fontSize="10"
+                    fill="#64748b"
+                  >
+                    {shortenChartLabel(
+                      item.label,
+                      12
+                    )}
+                  </text>
+                </g>
+              );
+            }
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function DynamicPieChart({
+  rows,
+  columns,
+}: {
+  rows: CSVRow[];
+  columns: DynamicColumnInfo;
+}) {
+  const categoryColumn =
+    columns.categorical[0] ||
+    columns.dates[0] ||
+    null;
+
+  if (!categoryColumn) {
+    return (
+      <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+        No categorical or date column was detected for a pie chart.
+      </div>
+    );
+  }
+
+  const grouped =
+    aggregateChartValues(
+      rows,
+      categoryColumn,
+      null
+    );
+
+  if (!grouped.length) {
+    return (
+      <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+        Not enough compatible CSV data for a pie chart.
+      </div>
+    );
+  }
+
+  const top = grouped.slice(0, 7);
+  const remaining = grouped
+    .slice(7)
+    .reduce(
+      (sum, item) => sum + item.value,
+      0
+    );
+
+  if (remaining > 0) {
+    top.push({
+      label: "Other",
+      value: remaining,
+    });
+  }
+
+  const total = Math.max(
+    top.reduce(
+      (sum, item) => sum + item.value,
+      0
+    ),
+    1
+  );
+
+  let start = 0;
+  const gradient = top
+    .map((item, index) => {
+      const percentage =
+        (item.value / total) * 100;
+      const end = start + percentage;
+      const color = [
+        "#2563eb",
+        "#7c3aed",
+        "#0891b2",
+        "#059669",
+        "#d97706",
+        "#dc2626",
+        "#db2777",
+        "#64748b",
+      ][index % 8];
+
+      const segment = `${color} ${start}% ${end}%`;
+      start = end;
+      return segment;
+    })
+    .join(", ");
+
+  return (
+    <div className="flex flex-col items-center gap-6 md:flex-row">
+      <div
+        className="h-52 w-52 shrink-0 rounded-full shadow-inner"
+        style={{
+          background: `conic-gradient(${gradient})`,
+        }}
+      />
+
+      <div className="w-full space-y-2">
+        <p className="mb-3 text-xs text-slate-400">
+          Distribution by {categoryColumn}
+        </p>
+
+        {top.map(
+          (item, index) => (
+            <div
+              key={item.label}
+              className="flex items-center justify-between gap-3 rounded-xl px-3 py-2 hover:bg-slate-50"
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{
+                    backgroundColor:
+                      [
+                        "#2563eb",
+                        "#7c3aed",
+                        "#0891b2",
+                        "#059669",
+                        "#d97706",
+                        "#dc2626",
+                        "#db2777",
+                        "#64748b",
+                      ][index % 8],
+                  }}
+                />
+                <span className="truncate text-xs font-semibold text-slate-600">
+                  {item.label}
+                </span>
+              </div>
+
+              <span className="text-xs font-black text-slate-800">
+                {formatNumber(
+                  item.value
+                )}
+              </span>
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DynamicStackedBarChart({
+  rows,
+  columns,
+}: {
+  rows: CSVRow[];
+  columns: DynamicColumnInfo;
+}) {
+  const categoryColumn =
+    columns.categorical[0] ||
+    columns.dates[0] ||
+    null;
+  const stackColumn =
+    columns.categorical.find(
+      (column) =>
+        column !== categoryColumn
+    ) || null;
+
+  if (!categoryColumn || !stackColumn) {
+    return (
+      <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+        At least two categorical columns are required for a stacked bar chart.
+      </div>
+    );
+  }
+
+  const stackTotals = new Map<
+    string,
+    number
+  >();
+
+  rows.forEach((row) => {
+    const stack =
+      row[stackColumn]?.trim() ||
+      "Unknown";
+
+    stackTotals.set(
+      stack,
+      (stackTotals.get(stack) || 0) + 1
+    );
+  });
+
+  const stackKeys = Array.from(
+    stackTotals.entries()
+  )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([key]) => key);
+
+  const allowedStacks = new Set(
+    stackKeys
+  );
+
+  const categoryTotals = new Map<
+    string,
+    Map<string, number>
+  >();
+
+  rows.forEach((row) => {
+    const category =
+      row[categoryColumn]?.trim() ||
+      "Unknown";
+    const stack =
+      row[stackColumn]?.trim() ||
+      "Unknown";
+
+    if (!allowedStacks.has(stack)) {
+      return;
+    }
+
+    const current =
+      categoryTotals.get(category) ||
+      new Map<string, number>();
+
+    current.set(
+      stack,
+      (current.get(stack) || 0) + 1
+    );
+
+    categoryTotals.set(
+      category,
+      current
+    );
+  });
+
+  const categories = Array.from(
+    categoryTotals.entries()
+  )
+    .sort(
+      (a, b) =>
+        Array.from(b[1].values()).reduce(
+          (sum, value) => sum + value,
+          0
+        ) -
+        Array.from(a[1].values()).reduce(
+          (sum, value) => sum + value,
+          0
+        )
+    )
+    .slice(0, 10);
+
+  if (!categories.length) {
+    return (
+      <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+        Not enough compatible CSV data for a stacked bar chart.
+      </div>
+    );
+  }
+
+  const colors = [
+    "#2563eb",
+    "#7c3aed",
+    "#0891b2",
+    "#059669",
+    "#d97706",
+  ];
+
+  return (
+    <div>
+      <p className="mb-4 text-xs text-slate-400">
+        {categoryColumn} grouped by {stackColumn}
+      </p>
+
+      <div className="space-y-4">
+        {categories.map(
+          ([category, stacks]) => {
+            const total =
+              Array.from(
+                stacks.values()
+              ).reduce(
+                (sum, value) =>
+                  sum + value,
+                0
+              );
+
+            return (
+              <div
+                key={category}
+                className="grid grid-cols-[100px_1fr_40px] items-center gap-3"
+              >
+                <span className="truncate text-[11px] font-bold text-slate-500">
+                  {shortenChartLabel(
+                    category,
+                    15
+                  )}
+                </span>
+
+                <div className="flex h-8 overflow-hidden rounded-lg bg-slate-100">
+                  {stackKeys.map(
+                    (stack, index) => {
+                      const value =
+                        stacks.get(stack) ||
+                        0;
+
+                      if (!value) {
+                        return null;
+                      }
+
+                      return (
+                        <div
+                          key={stack}
+                          title={`${stack}: ${value}`}
+                          className="h-full transition-all hover:brightness-110"
+                          style={{
+                            width: `${
+                              (value /
+                                Math.max(
+                                  total,
+                                  1
+                                )) *
+                              100
+                            }%`,
+                            backgroundColor:
+                              colors[
+                                index %
+                                  colors.length
+                              ],
+                          }}
+                        />
+                      );
+                    }
+                  )}
+                </div>
+
+                <span className="text-right text-xs font-black">
+                  {formatNumber(total)}
+                </span>
+              </div>
+            );
+          }
+        )}
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-3">
+        {stackKeys.map(
+          (stack, index) => (
+            <div
+              key={stack}
+              className="flex items-center gap-2 text-[11px] font-semibold text-slate-500"
+            >
+              <span
+                className="h-2.5 w-2.5 rounded-full"
+                style={{
+                  backgroundColor:
+                    colors[
+                      index %
+                        colors.length
+                    ],
+                }}
+              />
+              {shortenChartLabel(
+                stack,
+                18
+              )}
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DynamicHeatmap({
+  rows,
+  columns,
+}: {
+  rows: CSVRow[];
+  columns: DynamicColumnInfo;
+}) {
+  const firstColumn =
+    columns.categorical[0] || null;
+  const secondColumn =
+    columns.categorical.find(
+      (column) =>
+        column !== firstColumn
+    ) || null;
+
+  if (!firstColumn || !secondColumn) {
+    return (
+      <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+        At least two categorical columns are required for a heatmap.
+      </div>
+    );
+  }
+
+  const rowKeys = Array.from(
+    new Set(
+      rows
+        .map(
+          (row) =>
+            row[firstColumn]?.trim() ||
+            "Unknown"
+        )
+        .filter(Boolean)
+    )
+  ).slice(0, 8);
+
+  const columnKeys = Array.from(
+    new Set(
+      rows
+        .map(
+          (row) =>
+            row[secondColumn]?.trim() ||
+            "Unknown"
+        )
+        .filter(Boolean)
+    )
+  ).slice(0, 8);
+
+  const counts = new Map<
+    string,
+    number
+  >();
+
+  rows.forEach((row) => {
+    const rowKey =
+      row[firstColumn]?.trim() ||
+      "Unknown";
+    const columnKey =
+      row[secondColumn]?.trim() ||
+      "Unknown";
+
+    if (
+      rowKeys.includes(rowKey) &&
+      columnKeys.includes(columnKey)
+    ) {
+      const key = `${rowKey}|||${columnKey}`;
+
+      counts.set(
+        key,
+        (counts.get(key) || 0) + 1
+      );
+    }
+  });
+
+  const maxValue = Math.max(
+    ...Array.from(
+      counts.values()
+    ),
+    1
+  );
+
+  return (
+    <div>
+      <p className="mb-4 text-xs text-slate-400">
+        Record concentration:{" "}
+        {firstColumn} ×{" "}
+        {secondColumn}
+      </p>
+
+      <div className="overflow-x-auto">
+        <div
+          className="grid min-w-[620px] gap-1"
+          style={{
+            gridTemplateColumns: `120px repeat(${columnKeys.length}, minmax(52px, 1fr))`,
+          }}
+        >
+          <div />
+
+          {columnKeys.map(
+            (column) => (
+              <div
+                key={column}
+                className="truncate px-1 py-2 text-center text-[10px] font-bold text-slate-400"
+                title={column}
+              >
+                {shortenChartLabel(
+                  column,
+                  9
+                )}
+              </div>
+            )
+          )}
+
+          {rowKeys.map(
+            (rowKey) => (
+              <div
+                key={rowKey}
+                className="contents"
+              >
+                <div
+                  className="truncate px-2 py-3 text-[10px] font-bold text-slate-500"
+                  title={rowKey}
+                >
+                  {shortenChartLabel(
+                    rowKey,
+                    16
+                  )}
+                </div>
+
+                {columnKeys.map(
+                  (columnKey) => {
+                    const value =
+                      counts.get(
+                        `${rowKey}|||${columnKey}`
+                      ) || 0;
+
+                    const opacity =
+                      value === 0
+                        ? 0.04
+                        : 0.12 +
+                          (value /
+                            maxValue) *
+                            0.88;
+
+                    return (
+                      <div
+                        key={`${rowKey}-${columnKey}`}
+                        title={`${rowKey} × ${columnKey}: ${value}`}
+                        className="flex min-h-11 items-center justify-center rounded-lg text-xs font-black text-slate-700 transition-transform hover:scale-[1.03]"
+                        style={{
+                          backgroundColor: `rgba(37, 99, 235, ${opacity})`,
+                        }}
+                      >
+                        {value || ""}
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+            )
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DynamicAnalyticsCharts({
+  rows,
+}: {
+  rows: CSVRow[];
+}) {
+  const columns = useMemo(
+    () => detectDynamicColumns(rows),
+    [rows]
+  );
+
+  if (!rows.length) {
+    return null;
+  }
+
+  return (
+    <div className="mt-6 space-y-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="rounded-3xl border border-white bg-white p-7 shadow-lg shadow-slate-200/40">
+          <div className="mb-5">
+            <h3 className="text-lg font-black">
+              Dynamic Line Chart
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Automatically selected from the imported CSV columns.
+            </p>
+          </div>
+          <DynamicLineChart
+            rows={rows}
+            columns={columns}
+          />
+        </div>
+
+        <div className="rounded-3xl border border-white bg-white p-7 shadow-lg shadow-slate-200/40">
+          <div className="mb-5">
+            <h3 className="text-lg font-black">
+              Dynamic Pie Chart
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Automatically generated from the imported CSV categories.
+            </p>
+          </div>
+          <DynamicPieChart
+            rows={rows}
+            columns={columns}
+          />
+        </div>
+
+        <div className="rounded-3xl border border-white bg-white p-7 shadow-lg shadow-slate-200/40">
+          <div className="mb-5">
+            <h3 className="text-lg font-black">
+              Dynamic Stacked Bar Chart
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Automatically groups the CSV categorical columns.
+            </p>
+          </div>
+          <DynamicStackedBarChart
+            rows={rows}
+            columns={columns}
+          />
+        </div>
+
+        <div className="rounded-3xl border border-white bg-white p-7 shadow-lg shadow-slate-200/40">
+          <div className="mb-5">
+            <h3 className="text-lg font-black">
+              Dynamic Heatmap
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Automatically maps relationships between CSV categories.
+            </p>
+          </div>
+          <DynamicHeatmap
+            rows={rows}
+            columns={columns}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* =========================================================
    MAIN COMPONENT
 ========================================================= */
@@ -3131,6 +4101,12 @@ export default function Home() {
         {activeTab ===
           "analytics" && (
           <>
+            <DynamicAnalyticsCharts
+              rows={filteredRecords.map(
+                (record) => record.raw
+              )}
+            />
+
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {/* STATUS DONUT */}
 
@@ -3709,26 +4685,26 @@ export default function Home() {
                         </td>
 
                         <td className="px-6 py-5">
-          <button
-            onClick={() =>
-              openStatus(
-                record.status as StatusKey
-              )
-            }
-            className="rounded-full px-3 py-1.5 text-xs font-bold"
-            style={{
-              backgroundColor: `${STATUS_COLORS[record.status as StatusKey]}18`,
-              color:
-                STATUS_COLORS[
-                  record.status as StatusKey
-                ],
-            }}
-          >
-            {
-              record.status
-            }
-          </button>
-        </td>
+                          <button
+                            onClick={() =>
+                              openStatus(
+                                record.status
+                              )
+                            }
+                            className="rounded-full px-3 py-1.5 text-xs font-bold"
+                            style={{
+                              backgroundColor: `${STATUS_COLORS[record.status]}18`,
+                              color:
+                                STATUS_COLORS[
+                                  record.status
+                                ],
+                            }}
+                          >
+                            {
+                              record.status
+                            }
+                          </button>
+                        </td>
 
                         <td className="px-6 py-5">
                           <span
