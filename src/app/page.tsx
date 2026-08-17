@@ -1,389 +1,679 @@
 "use client";
 
-import React, { useState, useMemo, useRef } from "react";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import React, { ChangeEvent, useMemo, useState, useCallback } from "react";
 
 /* =========================================================
    TYPES & SCHEMAS
 ========================================================= */
 
-export type StatusKey = "Completed" | "In Progress" | "Not Started" | "At Risk" | "Delayed";
+export type StatusKey =
+  | "Completed"
+  | "In Progress"
+  | "Not Started"
+  | "At Risk"
+  | "Delayed";
+
 export type RiskLevel = "Low" | "Medium" | "High";
+
+export type CSVRow = Record<string, string>;
 
 export interface ProjectRecord {
   id: number;
+  raw: CSVRow;
   project: string;
   member: string;
   task: string;
+  target: number | null;
+  startDate: string;
+  endDate: string;
   progress: number;
   status: StatusKey;
   risk: RiskLevel;
-  department: string;
-  weeklyTrend: number[];
+  daysRequired: number | null;
+  daysRemaining: number | null;
+  delayDays: number;
+  category: string;
 }
 
-export type Tab = "projects" | "team" | "analytics";
+export interface DetailItem {
+  title: string;
+  value: string;
+}
+
+export interface DetailDrawerData {
+  title: string;
+  subtitle: string;
+  items: DetailItem[];
+  records: ProjectRecord[];
+}
+
+export type Tab = "projects" | "members" | "analytics";
 
 /* =========================================================
-   MOCK / INITIAL DATA GENERATOR
+   CONSTANTS & DICTIONARIES
 ========================================================= */
 
-const INITIAL_DATA: ProjectRecord[] = [
-  { id: 1, project: "Alpha AI Platform", member: "Karthik", task: "LLM Pipeline Setup", progress: 85, status: "In Progress", risk: "Low", department: "Data Science", weeklyTrend: [20, 40, 60, 75, 85] },
-  { id: 2, project: "Cloud Storage Revamp", member: "Priya", task: "S3 Migration", progress: 100, status: "Completed", risk: "Low", department: "DevOps", weeklyTrend: [10, 30, 70, 90, 100] },
-  { id: 3, project: "E-Commerce Gateway", member: "Arun", task: "Stripe Webhooks", progress: 45, status: "At Risk", risk: "High", department: "Backend", weeklyTrend: [15, 25, 35, 40, 45] },
-  { id: 4, project: "Mobile App Refresh", member: "Deepa", task: "UI Glassmorphism Theme", progress: 30, status: "Delayed", risk: "High", department: "Frontend", weeklyTrend: [5, 10, 20, 25, 30] },
-  { id: 5, project: "Analytics Dashboard", member: "Nandhan", task: "VBA & Next.js Integration", progress: 90, status: "In Progress", risk: "Medium", department: "Analytics", weeklyTrend: [30, 50, 70, 85, 90] },
-  { id: 6, project: "Security Hardening", member: "Suresh", task: "OAuth2 Refresh", progress: 10, status: "Not Started", risk: "Low", department: "DevOps", weeklyTrend: [0, 0, 5, 5, 10] },
-];
-
-const GOOGLE_COLORS: Record<StatusKey, string> = {
-  Completed: "#34A853",   // Google Green
-  "In Progress": "#4285F4", // Google Blue
-  "Not Started": "#FBBC04", // Google Yellow
-  "At Risk": "#FF7043",     // Google Orange
-  Delayed: "#EA4335",      // Google Red
+export const STATUS_COLORS: Record<StatusKey, string> = {
+  Completed: "#34A853",
+  "In Progress": "#4285F4",
+  "Not Started": "#FBBC04",
+  "At Risk": "#FF7043",
+  Delayed: "#EA4335",
 };
 
+const COLUMN_ALIASES: Record<string, string[]> = {
+  project: ["project", "project_name", "project_title", "client", "client_name", "customer", "customer_name"],
+  member: ["member", "team_member", "employee", "employee_name", "assigned_member", "assigned_to", "assignee", "owner", "developer"],
+  task: ["task", "task_name", "task_title", "activity", "activity_name", "title", "work"],
+  target: ["target", "target_value", "goal", "planned", "planned_value"],
+  status: ["status", "project_status", "task_status", "state", "project_state"],
+  progress: ["progress", "completion", "completion_percentage", "percent_complete", "percentage", "progress_percentage"],
+  startDate: ["start_date", "started_at", "start", "created_at", "date_started"],
+  endDate: ["end_date", "due_date", "deadline", "target_date", "completion_date", "finish_date"],
+  category: ["category", "project_category", "task_category", "type", "department", "team", "group", "domain"],
+};
+
+const STATUS_KEYWORD_MAP: Array<{ key: StatusKey; terms: string[] }> = [
+  { key: "Delayed", terms: ["delayed", "delay", "overdue", "late"] },
+  { key: "At Risk", terms: ["risk", "at risk", "high risk"] },
+  { key: "Completed", terms: ["completed", "complete", "done", "closed", "finished", "success"] },
+  { key: "In Progress", terms: ["active", "in progress", "ongoing", "working", "started"] },
+  { key: "Not Started", terms: ["pending", "todo", "to do", "not started", "waiting", "open"] },
+];
+
 /* =========================================================
-   SPARKLINE SVG COMPONENT
+   PURE UTILITY & ANALYTICS HELPERS
 ========================================================= */
 
-function Sparkline({ data, color = "#4285F4" }: { data: number[]; color?: string }) {
-  if (!data || data.length < 2) return null;
-  const max = Math.max(...data, 100);
-  const min = Math.min(...data, 0);
-  const width = 120;
-  const height = 30;
+function normalizeColumnName(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
 
-  const points = data
-    .map((val, idx) => {
-      const x = (idx / (data.length - 1)) * width;
-      const y = height - ((val - min) / (max - min || 1)) * height;
-      return `${x},${y}`;
-    })
-    .join(" ");
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (insideQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+    } else if (char === "," && !insideQuotes) {
+      result.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result.map((val) => val.replace(/^"(.*)"$/, "$1").trim());
+}
+
+export function parseCSV(text: string): CSVRow[] {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n").filter((line) => line.trim() !== "");
+  if (lines.length < 2) return [];
+
+  const headers = parseCSVLine(lines[0]).map(normalizeColumnName);
+  return lines.slice(1).map((line) => {
+    const values = parseCSVLine(line);
+    const row: CSVRow = {};
+    headers.forEach((header, index) => {
+      row[header] = values[index] ?? "";
+    });
+    return row;
+  });
+}
+
+function findColumn(rows: CSVRow[], possibleNames: string[]): string | null {
+  if (!rows.length) return null;
+  const columns = Object.keys(rows[0]);
+  for (const name of possibleNames) {
+    const normalized = normalizeColumnName(name);
+    const exact = columns.find((col) => col === normalized);
+    if (exact) return exact;
+  }
+  for (const name of possibleNames) {
+    const normalized = normalizeColumnName(name);
+    const partial = columns.find((col) => col.includes(normalized) || normalized.includes(col));
+    if (partial) return partial;
+  }
+  return null;
+}
+
+function parseNumber(value: string): number | null {
+  if (!value?.trim()) return null;
+  const cleaned = value.replace(/[$₹€£,%\s]/g, "");
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? num : null;
+}
+
+function parseDate(value: string): Date | null {
+  if (!value?.trim()) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function differenceInDays(start: Date, end: Date): number {
+  return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeStatus(value: string): StatusKey {
+  const valLower = value.toLowerCase().trim();
+  for (const group of STATUS_KEYWORD_MAP) {
+    if (group.terms.some((term) => valLower.includes(term))) {
+      return group.key;
+    }
+  }
+  return "Not Started";
+}
+
+function deriveStatus(
+  rawStatus: string,
+  progress: number,
+  daysRemaining: number | null,
+  delayDays: number
+): StatusKey {
+  if (rawStatus.trim()) {
+    const status = normalizeStatus(rawStatus);
+    if (status === "Completed" || status === "Delayed" || status === "At Risk") {
+      return status;
+    }
+  }
+  if (progress >= 100) return "Completed";
+  if (delayDays > 0 && progress < 100) return "Delayed";
+  if (daysRemaining !== null && daysRemaining <= 3 && progress < 80) return "At Risk";
+  if (progress > 0) return "In Progress";
+  return "Not Started";
+}
+
+function calculateRisk(
+  progress: number,
+  daysRemaining: number | null,
+  delayDays: number,
+  status: StatusKey
+): RiskLevel {
+  if (status === "Delayed" || delayDays >= 3) return "High";
+  if (status === "At Risk" || (daysRemaining !== null && daysRemaining <= 3 && progress < 70)) return "High";
+  if (daysRemaining !== null && daysRemaining <= 7 && progress < 80) return "Medium";
+  if (progress < 30 && daysRemaining !== null && daysRemaining <= 14) return "Medium";
+  return "Low";
+}
+
+export function normalizeRecords(rows: CSVRow[]): ProjectRecord[] {
+  if (!rows.length) return [];
+
+  const colProj = findColumn(rows, COLUMN_ALIASES.project);
+  const colMem = findColumn(rows, COLUMN_ALIASES.member);
+  const colTask = findColumn(rows, COLUMN_ALIASES.task);
+  const colTarget = findColumn(rows, COLUMN_ALIASES.target);
+  const colStatus = findColumn(rows, COLUMN_ALIASES.status);
+  const colProgress = findColumn(rows, COLUMN_ALIASES.progress);
+  const colStart = findColumn(rows, COLUMN_ALIASES.startDate);
+  const colEnd = findColumn(rows, COLUMN_ALIASES.endDate);
+  const colCat = findColumn(rows, COLUMN_ALIASES.category);
+
+  const today = new Date();
+
+  return rows.map((row, index) => {
+    const project = row[colProj || ""]?.trim() || "Unassigned Project";
+    const member = row[colMem || ""]?.trim() || "Unassigned Member";
+    const task = row[colTask || ""]?.trim() || `Task ${index + 1}`;
+    const target = colTarget ? parseNumber(row[colTarget] || "") : null;
+    const progressRaw = colProgress ? parseNumber(row[colProgress] || "") : null;
+    const progress = clamp(progressRaw ?? 0, 0, 100);
+
+    const startDate = row[colStart || ""]?.trim() || "";
+    const endDate = row[colEnd || ""]?.trim() || "";
+
+    const start = parseDate(startDate);
+    const end = parseDate(endDate);
+
+    const daysRequired = start && end ? Math.max(differenceInDays(start, end), 0) : null;
+    const daysRemaining = end ? differenceInDays(today, end) : null;
+    const delayDays = end && progress < 100 && today > end ? Math.max(differenceInDays(end, today), 0) : 0;
+
+    const rawStatusVal = colStatus ? row[colStatus] || "" : "";
+    const status = deriveStatus(rawStatusVal, progress, daysRemaining, delayDays);
+    const risk = calculateRisk(progress, daysRemaining, delayDays, status);
+
+    return {
+      id: index,
+      raw: row,
+      project,
+      member,
+      task,
+      target,
+      startDate,
+      endDate,
+      progress,
+      status,
+      risk,
+      daysRequired,
+      daysRemaining,
+      delayDays,
+      category: row[colCat || ""]?.trim() || "General",
+    };
+  });
+}
+
+/* =========================================================
+   UI ICON COMPONENT
+========================================================= */
+
+export function Icon({
+  name,
+}: {
+  name:
+    | "folder"
+    | "users"
+    | "chart"
+    | "search"
+    | "upload"
+    | "download"
+    | "filter"
+    | "refresh"
+    | "alert"
+    | "clock"
+    | "check"
+    | "activity"
+    | "calendar"
+    | "arrow"
+    | "close";
+}) {
+  const common = "h-5 w-5 stroke-current";
+
+  const renderPath = () => {
+    switch (name) {
+      case "folder":
+        return (
+          <>
+            <path d="M3 7.5h6l2 2h10v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            <path d="M3 7.5V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2.5" />
+          </>
+        );
+      case "users":
+        return (
+          <>
+            <circle cx="9" cy="8" r="3" />
+            <path d="M3 20a6 6 0 0 1 12 0" />
+            <circle cx="17" cy="9" r="2.5" />
+            <path d="M16 14a5 5 0 0 1 5 5" />
+          </>
+        );
+      case "chart":
+        return (
+          <>
+            <path d="M4 19V5" />
+            <path d="M4 19h17" />
+            <path d="m7 15 4-5 3 3 5-7" />
+          </>
+        );
+      case "search":
+        return (
+          <>
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-4-4" />
+          </>
+        );
+      case "upload":
+        return (
+          <>
+            <path d="M12 16V4" />
+            <path d="m7 9 5-5 5 5" />
+            <path d="M5 20h14" />
+          </>
+        );
+      case "download":
+        return (
+          <>
+            <path d="M12 4v12" />
+            <path d="m7 11 5 5 5-5" />
+            <path d="M5 20h14" />
+          </>
+        );
+      case "filter":
+        return (
+          <>
+            <path d="M4 6h16" />
+            <path d="M7 12h10" />
+            <path d="M10 18h4" />
+          </>
+        );
+      case "refresh":
+        return (
+          <>
+            <path d="M20 11a8 8 0 0 0-14.8-4L3 10" />
+            <path d="M3 5v5h5" />
+            <path d="M4 13a8 8 0 0 0 14.8 4L21 14" />
+            <path d="M21 19v-5h-5" />
+          </>
+        );
+      case "alert":
+        return (
+          <>
+            <path d="M10.3 3.8 2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z" />
+            <path d="M12 9v4" />
+            <path d="M12 16h.01" />
+          </>
+        );
+      case "clock":
+        return (
+          <>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </>
+        );
+      case "check":
+        return <path d="m5 12 4 4L19 6" />;
+      case "activity":
+        return <path d="M3 12h4l2-6 4 12 2-6h6" />;
+      case "calendar":
+        return (
+          <>
+            <rect x="3" y="4" width="18" height="17" rx="2" />
+            <path d="M16 2v4M8 2v4M3 10h18" />
+          </>
+        );
+      case "arrow":
+        return (
+          <>
+            <path d="M5 12h14" />
+            <path d="m13 6 6 6-6 6" />
+          </>
+        );
+      case "close":
+        return (
+          <>
+            <path d="m6 6 12 12" />
+            <path d="m18 6-12 12" />
+          </>
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
-    <svg width={width} height={height} className="overflow-visible">
-      <polyline fill="none" stroke={color} strokeWidth="2.5" points={points} strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      className={common}
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {renderPath()}
     </svg>
   );
 }
 
 /* =========================================================
-   MAIN COMPONENT
+   MAIN DASHBOARD COMPONENT
 ========================================================= */
 
 export default function DashboardHome() {
-  const [records] = useState<ProjectRecord[]>(INITIAL_DATA);
+  const [rows, setRows] = useState<CSVRow[]>([]);
+  const [fileName, setFileName] = useState("");
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+  const [isImporting, setIsImporting] = useState(false);
+
   const [activeTab, setActiveTab] = useState<Tab>("projects");
-  const [isExporting, setIsExporting] = useState<boolean>(false);
-  const [search, setSearch] = useState<string>("");
+  const [projectFilter, setProjectFilter] = useState("All");
+  const [memberFilter, setMemberFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [riskFilter, setRiskFilter] = useState("All");
 
-  // Refs for PDF Export Pages
-  const page1Ref = useRef<HTMLDivElement>(null);
-  const page2Ref = useRef<HTMLDivElement>(null);
-  const page3Ref = useRef<HTMLDivElement>(null);
+  const [drawer, setDrawer] = useState<DetailDrawerData | null>(null);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 15;
 
-  /* --- Data Filters & Calculations --- */
+  /* --- File Import Handler --- */
+  const handleFileUpload = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    setError("");
+    setFileName(file.name);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const text = evt.target?.result as string;
+        const parsedRows = parseCSV(text);
+        if (!parsedRows.length) {
+          setError("CSV file contains no valid rows or header format is corrupted.");
+        } else {
+          setRows(parsedRows);
+          setPage(1);
+        }
+      } catch (err) {
+        setError("Failed to parse CSV file. Ensure valid RFC 4180 standard file format.");
+      } finally {
+        setIsImporting(false);
+      }
+    };
+    reader.readAsText(file);
+  }, []);
+
+  /* --- Data Normalization --- */
+  const records = useMemo(() => normalizeRecords(rows), [rows]);
+
+  /* --- Unique Metadata Lists --- */
+  const projects = useMemo(
+    () => Array.from(new Set(records.map((r) => r.project))).sort(),
+    [records]
+  );
+
+  const members = useMemo(
+    () => Array.from(new Set(records.map((r) => r.member))).sort(),
+    [records]
+  );
+
+  /* --- Main Data Filtering --- */
   const filteredRecords = useMemo(() => {
-    const q = search.toLowerCase();
-    return records.filter(
-      (r) =>
-        r.project.toLowerCase().includes(q) ||
-        r.member.toLowerCase().includes(q) ||
-        r.department.toLowerCase().includes(q) ||
-        r.status.toLowerCase().includes(q)
-    );
-  }, [records, search]);
+    const query = search.trim().toLowerCase();
+    return records.filter((record) => {
+      if (projectFilter !== "All" && record.project !== projectFilter) return false;
+      if (memberFilter !== "All" && record.member !== memberFilter) return false;
+      if (statusFilter !== "All" && record.status !== statusFilter) return false;
+      if (riskFilter !== "All" && record.risk !== riskFilter) return false;
 
-  const metrics = useMemo(() => {
+      if (!query) return true;
+
+      return (
+        record.project.toLowerCase().includes(query) ||
+        record.member.toLowerCase().includes(query) ||
+        record.task.toLowerCase().includes(query) ||
+        Object.values(record.raw).some((val) => val.toLowerCase().includes(query))
+      );
+    });
+  }, [records, search, projectFilter, memberFilter, statusFilter, riskFilter]);
+
+  /* --- Pagination --- */
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE));
+  const paginatedRecords = useMemo(
+    () => filteredRecords.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredRecords, page]
+  );
+
+  /* --- High-Level KPIs --- */
+  const kpis = useMemo(() => {
     const total = filteredRecords.length;
+    if (!total) {
+      return { total: 0, completed: 0, inProgress: 0, notStarted: 0, atRisk: 0, delayed: 0, avgProgress: 0, avgDaysRequired: 0 };
+    }
     const completed = filteredRecords.filter((r) => r.status === "Completed").length;
-    const highRisk = filteredRecords.filter((r) => r.risk === "High").length;
-    const avgProgress = total ? Math.round(filteredRecords.reduce((acc, r) => acc + r.progress, 0) / total) : 0;
+    const inProgress = filteredRecords.filter((r) => r.status === "In Progress").length;
+    const notStarted = filteredRecords.filter((r) => r.status === "Not Started").length;
+    const atRisk = filteredRecords.filter((r) => r.status === "At Risk" || r.risk === "High").length;
+    const delayed = filteredRecords.filter((r) => r.status === "Delayed").length;
 
-    return { total, completed, highRisk, avgProgress };
+    const avgProg = filteredRecords.reduce((sum, r) => sum + r.progress, 0) / total;
+    const reqDaysItems = filteredRecords.filter((r) => r.daysRequired !== null);
+    const avgDays = reqDaysItems.length
+      ? reqDaysItems.reduce((sum, r) => sum + (r.daysRequired || 0), 0) / reqDaysItems.length
+      : 0;
+
+    return { total, completed, inProgress, notStarted, atRisk, delayed, avgProgress: avgProg, avgDaysRequired: avgDays };
   }, [filteredRecords]);
 
-  /* --- Multi-Page Visual PDF Export Handler --- */
-  const handleExportPDF = async () => {
-    setIsExporting(true);
+  /* --- Data Quality Auditor --- */
+  const dataQuality = useMemo(() => {
+    if (!rows.length) return { columns: 0, missing: 0, duplicates: 0, valid: 0 };
+    const columns = Object.keys(rows[0]).length;
+    let missing = 0;
 
-    try {
-      const pdf = new jsPDF("landscape", "pt", "a4");
+    rows.forEach((row) => {
+      Object.values(row).forEach((v) => {
+        if (!v.trim()) missing++;
+      });
+    });
 
-      const pages = [
-        { ref: page1Ref },
-        { ref: page2Ref },
-        { ref: page3Ref },
-      ];
+    const signatures = rows.map((r) => Object.values(r).join("|"));
+    const duplicates = signatures.length - new Set(signatures).size;
 
-      for (let i = 0; i < pages.length; i++) {
-        const targetRef = pages[i].ref.current;
-        if (!targetRef) continue;
+    return { columns, missing, duplicates, valid: rows.length - duplicates };
+  }, [rows]);
 
-        const canvas = await html2canvas(targetRef, {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: "#F8FAFC",
-        });
-
-        const imgData = canvas.toDataURL("image/png");
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-
-        if (i > 0) pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-      }
-
-      pdf.save(`Project_Intelligence_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
-    } catch (err) {
-      console.error("PDF Export error:", err);
-    } finally {
-      setIsExporting(false);
-    }
-  };
+  /* --- Risk Warning Pipeline --- */
+  const riskAlerts = useMemo(
+    () => ({
+      highRisk: filteredRecords.filter((r) => r.risk === "High"),
+      delayed: filteredRecords.filter((r) => r.status === "Delayed"),
+      approaching: filteredRecords.filter(
+        (r) => r.daysRemaining !== null && r.daysRemaining >= 0 && r.daysRemaining <= 7 && r.progress < 100
+      ),
+    }),
+    [filteredRecords]
+  );
 
   return (
-    <main className="min-h-screen bg-slate-50 p-8 text-slate-800 font-sans">
-      {/* Top Header */}
-      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <main className="min-h-screen bg-slate-50 p-6 text-slate-800">
+      <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Project Intelligence Hub</h1>
-          <p className="text-sm font-medium text-slate-500 mt-1">
-            Data Science Insights, Dynamic Analytics & Team Performance Dashboard
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Project Intelligence Dashboard</h1>
+          <p className="text-sm text-slate-500">Full-stack operational intelligence & dataset analytics hub.</p>
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleExportPDF}
-            disabled={isExporting}
-            className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-blue-700 active:scale-95 disabled:opacity-50"
-          >
-            <svg className="h-4 w-4 fill-current" viewBox="0 0 20 20">
-              <path d="M13 8V2H7v6H2l8 8 8-8h-5zM0 18h20v2H0v-2z" />
-            </svg>
-            <span>{isExporting ? "Generating PDF..." : "Export Multi-Page PDF"}</span>
-          </button>
+          <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700">
+            <Icon name="upload" />
+            <span>{isImporting ? "Processing..." : "Import CSV"}</span>
+            <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
+          </label>
         </div>
       </header>
 
-      {/* Navigation Tabs */}
-      <nav className="mb-8 flex gap-2 border-b border-slate-200">
-        {(["projects", "team", "analytics"] as Tab[]).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-6 py-3 text-sm font-bold capitalize transition border-b-2 ${
-              activeTab === tab
-                ? "border-blue-600 text-blue-600 font-semibold"
-                : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            {tab === "projects" ? "All Projects" : tab}
-          </button>
-        ))}
-      </nav>
+      {error && (
+        <div className="mb-6 flex items-center gap-2 rounded-md bg-red-50 p-4 text-sm text-red-700 border border-red-200">
+          <Icon name="alert" />
+          <span>{error}</span>
+        </div>
+      )}
 
-      {/* PAGE 1: ALL PROJECTS */}
-      <div
-        ref={page1Ref}
-        className={`bg-slate-50 p-6 rounded-2xl ${activeTab === "projects" ? "block" : "hidden"}`}
-      >
-        <h2 className="text-xl font-bold text-slate-900 mb-4">Executive Overview & Metrics</h2>
+      {/* Analytics Summary Banner */}
+      <section className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-6">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Records</span>
+          <p className="mt-1 text-2xl font-bold text-slate-900">{kpis.total}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Completed</span>
+          <p className="mt-1 text-2xl font-bold text-emerald-600">{kpis.completed}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">In Progress</span>
+          <p className="mt-1 text-2xl font-bold text-blue-600">{kpis.inProgress}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">At Risk</span>
+          <p className="mt-1 text-2xl font-bold text-orange-600">{kpis.atRisk}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Delayed</span>
+          <p className="mt-1 text-2xl font-bold text-red-600">{kpis.delayed}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Avg Progress</span>
+          <p className="mt-1 text-2xl font-bold text-indigo-600">{Math.round(kpis.avgProgress)}%</p>
+        </div>
+      </section>
 
-        <section className="mb-8 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Total Projects</span>
-              <p className="mt-2 text-3xl font-extrabold text-slate-900">{metrics.total}</p>
-            </div>
-            <Sparkline data={[2, 4, 3, 5, 6]} color="#4285F4" />
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Completed</span>
-              <p className="mt-2 text-3xl font-extrabold text-emerald-600">{metrics.completed}</p>
-            </div>
-            <Sparkline data={[1, 2, 4, 5, 8]} color="#34A853" />
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">High Risk Alerts</span>
-              <p className="mt-2 text-3xl font-extrabold text-red-600">{metrics.highRisk}</p>
-            </div>
-            <Sparkline data={[5, 4, 6, 3, 2]} color="#EA4335" />
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Avg Completion</span>
-              <p className="mt-2 text-3xl font-extrabold text-indigo-600">{metrics.avgProgress}%</p>
-            </div>
-            <Sparkline data={[10, 30, 45, 60, metrics.avgProgress]} color="#FBBC04" />
-          </div>
-        </section>
-
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-100">
+      {/* Content Workspace Placeholder */}
+      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+          <div className="relative w-72">
             <input
               type="text"
-              placeholder="Search by project, team member, or status..."
+              placeholder="Search datasets..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full max-w-md rounded-lg border border-slate-200 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-slate-200 pl-9 pr-4 py-2 text-sm focus:border-blue-500 focus:outline-none"
             />
+            <div className="absolute left-2.5 top-2.5 text-slate-400">
+              <Icon name="search" />
+            </div>
           </div>
+          <div className="text-xs text-slate-500">
+            Data Quality Score: <span className="font-semibold text-slate-700">{dataQuality.valid} Valid Rows</span> ({dataQuality.missing} missing values)
+          </div>
+        </div>
+
+        <div className="mt-4 overflow-x-auto">
           <table className="w-full text-left text-sm text-slate-600">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-400 font-bold">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-400">
               <tr>
-                <th className="px-6 py-4">Project</th>
-                <th className="px-6 py-4">Department</th>
-                <th className="px-6 py-4">Member</th>
-                <th className="px-6 py-4">Progress</th>
-                <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4">Weekly Velocity</th>
+                <th className="px-4 py-3">Project</th>
+                <th className="px-4 py-3">Member</th>
+                <th className="px-4 py-3">Task</th>
+                <th className="px-4 py-3">Progress</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Risk</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredRecords.map((r) => (
-                <tr key={r.id} className="hover:bg-slate-50/50">
-                  <td className="px-6 py-4 font-bold text-slate-900">{r.project}</td>
-                  <td className="px-6 py-4 font-medium text-slate-500">{r.department}</td>
-                  <td className="px-6 py-4">{r.member}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-24 bg-slate-100 rounded-full h-2">
-                        <div
-                          className="h-2 rounded-full"
-                          style={{ width: `${r.progress}%`, backgroundColor: GOOGLE_COLORS[r.status] }}
-                        />
-                      </div>
-                      <span className="font-semibold text-xs">{r.progress}%</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span
-                      className="inline-flex items-center rounded-full px-3 py-1 text-xs font-bold"
-                      style={{ backgroundColor: `${GOOGLE_COLORS[r.status]}15`, color: GOOGLE_COLORS[r.status] }}
-                    >
-                      {r.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <Sparkline data={r.weeklyTrend} color={GOOGLE_COLORS[r.status]} />
+              {paginatedRecords.length > 0 ? (
+                paginatedRecords.map((rec) => (
+                  <tr key={rec.id} className="hover:bg-slate-50/50">
+                    <td className="px-4 py-3 font-medium text-slate-900">{rec.project}</td>
+                    <td className="px-4 py-3">{rec.member}</td>
+                    <td className="px-4 py-3">{rec.task}</td>
+                    <td className="px-4 py-3">{rec.progress}%</td>
+                    <td className="px-4 py-3">
+                      <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ backgroundColor: `${STATUS_COLORS[rec.status]}20`, color: STATUS_COLORS[rec.status] }}>
+                        {rec.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 font-semibold text-xs">
+                      <span className={rec.risk === "High" ? "text-red-600" : rec.risk === "Medium" ? "text-amber-600" : "text-emerald-600"}>
+                        {rec.risk}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                    No matching records found. Upload a CSV file or modify active filters.
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* PAGE 2: TEAM FUNNEL CHART */}
-      <div
-        ref={page2Ref}
-        className={`bg-slate-50 p-6 rounded-2xl ${activeTab === "team" ? "block" : "hidden"}`}
-      >
-        <h2 className="text-xl font-bold text-slate-900 mb-2">Team Member Execution Funnel</h2>
-        <p className="text-sm text-slate-500 mb-6">Visual workflow pipeline tracking file and task completions.</p>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-          <div className="max-w-xl mx-auto flex flex-col items-center gap-3">
-            <div className="w-full bg-blue-500 text-white font-bold py-4 text-center rounded-lg shadow-sm">
-              Tasks Assigned (100 Files)
-            </div>
-            <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[10px] border-t-blue-500" />
-
-            <div className="w-[80%] bg-indigo-500 text-white font-bold py-4 text-center rounded-lg shadow-sm">
-              In Progress / Processing (75 Files)
-            </div>
-            <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[10px] border-t-indigo-500" />
-
-            <div className="w-[60%] bg-amber-500 text-white font-bold py-4 text-center rounded-lg shadow-sm">
-              Under Review / QA (50 Files)
-            </div>
-            <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[10px] border-t-amber-500" />
-
-            <div className="w-[40%] bg-emerald-500 text-white font-bold py-4 text-center rounded-lg shadow-sm">
-              Fully Completed (35 Files)
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* PAGE 3: VISUAL ANALYTICS */}
-      <div
-        ref={page3Ref}
-        className={`bg-slate-50 p-6 rounded-2xl ${activeTab === "analytics" ? "block" : "hidden"}`}
-      >
-        <h2 className="text-xl font-bold text-slate-900 mb-6">Visual Analytics & Distribution Matrix</h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">Project Velocity (Line Chart)</h3>
-            <div className="h-48 flex items-end gap-6 border-b border-l border-slate-200 pb-2 pl-2">
-              {[20, 35, 50, 65, 80, 95].map((val, i) => (
-                <div key={i} className="flex-1 flex flex-col items-center gap-2">
-                  <div className="w-full bg-blue-500 rounded-t-sm" style={{ height: `${val * 1.5}px` }} />
-                  <span className="text-xs text-slate-400 font-semibold">W{i + 1}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col items-center">
-            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4 w-full text-left">
-              Status Ratio (Pie Chart)
-            </h3>
-            <div className="relative w-40 h-40 rounded-full bg-[conic-gradient(#34A853_0%_35%,#4285F4_35%_65%,#FBBC04_65%_80%,#EA4335_80%_100%)] shadow-inner" />
-            <div className="flex gap-4 mt-6 text-xs font-bold">
-              <span className="text-emerald-600">● Done (35%)</span>
-              <span className="text-blue-600">● Active (30%)</span>
-              <span className="text-amber-500">● Pending (15%)</span>
-              <span className="text-red-500">● Delayed (20%)</span>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">
-              Department Progress (Stacked Bar Chart)
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <span className="text-xs font-bold text-slate-600">Data Science</span>
-                <div className="flex h-4 w-full rounded-full overflow-hidden bg-slate-100 mt-1">
-                  <div style={{ width: "60%" }} className="bg-emerald-500" />
-                  <div style={{ width: "25%" }} className="bg-blue-500" />
-                  <div style={{ width: "15%" }} className="bg-red-500" />
-                </div>
-              </div>
-              <div>
-                <span className="text-xs font-bold text-slate-600">DevOps</span>
-                <div className="flex h-4 w-full rounded-full overflow-hidden bg-slate-100 mt-1">
-                  <div style={{ width: "80%" }} className="bg-emerald-500" />
-                  <div style={{ width: "20%" }} className="bg-amber-500" />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">Risk Heatmap Matrix</h3>
-            <div className="grid grid-cols-3 gap-2 text-center text-xs font-bold">
-              <div className="bg-emerald-100 text-emerald-800 p-4 rounded-lg">Low Risk<br />(Dense: 12)</div>
-              <div className="bg-amber-100 text-amber-800 p-4 rounded-lg">Med Risk<br />(Dense: 5)</div>
-              <div className="bg-red-200 text-red-900 p-4 rounded-lg">High Risk<br />(Critical: 3)</div>
-            </div>
-          </div>
-        </div>
-      </div>
+      </section>
     </main>
   );
 }
