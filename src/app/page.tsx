@@ -4688,7 +4688,7 @@ export default function Home() {
                           <button
                             onClick={() =>
                               openStatus(
-                                record.status
+                                record.status as StatusKey
                               )
                             }
                             className="rounded-full px-3 py-1.5 text-xs font-bold"
