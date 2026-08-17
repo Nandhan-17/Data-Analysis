@@ -25,7 +25,7 @@ type ProjectRecord = {
   endDate: string;
 
   progress: number;
-  status: string;\\
+  status: string;onClick={() => openStatus(record.status as any)}
   risk: "Low" | "Medium" | "High";
 
   daysRequired: number | null;
