@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useRef, ChangeEvent } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 
@@ -77,7 +77,7 @@ function Sparkline({ data, color = "#4285F4" }: { data: number[]; color?: string
 ========================================================= */
 
 export default function DashboardHome() {
-  const [records, setRecords] = useState<ProjectRecord[]>(INITIAL_DATA);
+  const [records] = useState<ProjectRecord[]>(INITIAL_DATA);
   const [activeTab, setActiveTab] = useState<Tab>("projects");
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [search, setSearch] = useState<string>("");
@@ -105,12 +105,7 @@ export default function DashboardHome() {
     const highRisk = filteredRecords.filter((r) => r.risk === "High").length;
     const avgProgress = total ? Math.round(filteredRecords.reduce((acc, r) => acc + r.progress, 0) / total) : 0;
 
-    return {
-      total,
-      completed,
-      highRisk,
-      avgProgress,
-    };
+    return { total, completed, highRisk, avgProgress };
   }, [filteredRecords]);
 
   /* --- Multi-Page Visual PDF Export Handler --- */
@@ -121,9 +116,9 @@ export default function DashboardHome() {
       const pdf = new jsPDF("landscape", "pt", "a4");
 
       const pages = [
-        { ref: page1Ref, title: "Page 1: All Projects & Metrics" },
-        { ref: page2Ref, title: "Page 2: Team Member Funnel Analysis" },
-        { ref: page3Ref, title: "Page 3: Analytics & Visual Charts" },
+        { ref: page1Ref },
+        { ref: page2Ref },
+        { ref: page3Ref },
       ];
 
       for (let i = 0; i < pages.length; i++) {
@@ -131,7 +126,7 @@ export default function DashboardHome() {
         if (!targetRef) continue;
 
         const canvas = await html2canvas(targetRef, {
-          scale: 2, // High DPI resolution rendering
+          scale: 2,
           useCORS: true,
           backgroundColor: "#F8FAFC",
         });
@@ -164,7 +159,6 @@ export default function DashboardHome() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Multi-Page PDF Export Button */}
           <button
             onClick={handleExportPDF}
             disabled={isExporting}
@@ -186,27 +180,22 @@ export default function DashboardHome() {
             onClick={() => setActiveTab(tab)}
             className={`px-6 py-3 text-sm font-bold capitalize transition border-b-2 ${
               activeTab === tab
-                ? "border-blue-600 text-blue-600"
+                ? "border-blue-600 text-blue-600 font-semibold"
                 : "border-transparent text-slate-500 hover:text-slate-800"
             }`}
           >
-            {tab === "projects font-semibold" ? "All Projects" : tab}
+            {tab === "projects" ? "All Projects" : tab}
           </button>
         ))}
       </nav>
 
-      {/* =========================================================
-          EXPORTABLE CANVAS CONTAINER (HIDDEN CAPTURE WRAPPER OR INLINE)
-      ========================================================= */}
-
-      {/* PAGE 1: ALL PROJECTS & SPARKLINE CARDS */}
+      {/* PAGE 1: ALL PROJECTS */}
       <div
         ref={page1Ref}
         className={`bg-slate-50 p-6 rounded-2xl ${activeTab === "projects" ? "block" : "hidden"}`}
       >
         <h2 className="text-xl font-bold text-slate-900 mb-4">Executive Overview & Metrics</h2>
 
-        {/* 4 Metric Cards with Sparklines */}
         <section className="mb-8 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div>
@@ -241,7 +230,6 @@ export default function DashboardHome() {
           </div>
         </section>
 
-        {/* Projects Data Table */}
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <div className="p-4 border-b border-slate-100">
             <input
@@ -308,25 +296,21 @@ export default function DashboardHome() {
 
         <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="max-w-xl mx-auto flex flex-col items-center gap-3">
-            {/* Stage 1 */}
             <div className="w-full bg-blue-500 text-white font-bold py-4 text-center rounded-lg shadow-sm">
               Tasks Assigned (100 Files)
             </div>
             <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[10px] border-t-blue-500" />
 
-            {/* Stage 2 */}
             <div className="w-[80%] bg-indigo-500 text-white font-bold py-4 text-center rounded-lg shadow-sm">
               In Progress / Processing (75 Files)
             </div>
             <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[10px] border-t-indigo-500" />
 
-            {/* Stage 3 */}
             <div className="w-[60%] bg-amber-500 text-white font-bold py-4 text-center rounded-lg shadow-sm">
               Under Review / QA (50 Files)
             </div>
             <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[10px] border-t-amber-500" />
 
-            {/* Stage 4 */}
             <div className="w-[40%] bg-emerald-500 text-white font-bold py-4 text-center rounded-lg shadow-sm">
               Fully Completed (35 Files)
             </div>
@@ -334,7 +318,7 @@ export default function DashboardHome() {
         </div>
       </div>
 
-      {/* PAGE 3: VISUAL ANALYTICS (LINE, PIE, STACKED BAR, HEATMAP) */}
+      {/* PAGE 3: VISUAL ANALYTICS */}
       <div
         ref={page3Ref}
         className={`bg-slate-50 p-6 rounded-2xl ${activeTab === "analytics" ? "block" : "hidden"}`}
@@ -342,7 +326,6 @@ export default function DashboardHome() {
         <h2 className="text-xl font-bold text-slate-900 mb-6">Visual Analytics & Distribution Matrix</h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* 1. Line Chart (Progress Velocity) */}
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">Project Velocity (Line Chart)</h3>
             <div className="h-48 flex items-end gap-6 border-b border-l border-slate-200 pb-2 pl-2">
@@ -355,7 +338,6 @@ export default function DashboardHome() {
             </div>
           </div>
 
-          {/* 2. Pie Chart (Status Distribution) */}
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col items-center">
             <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4 w-full text-left">
               Status Ratio (Pie Chart)
@@ -369,7 +351,6 @@ export default function DashboardHome() {
             </div>
           </div>
 
-          {/* 3. Stacked Bar Chart */}
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">
               Department Progress (Stacked Bar Chart)
@@ -393,7 +374,6 @@ export default function DashboardHome() {
             </div>
           </div>
 
-          {/* 4. Heatmap Matrix */}
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">Risk Heatmap Matrix</h3>
             <div className="grid grid-cols-3 gap-2 text-center text-xs font-bold">
